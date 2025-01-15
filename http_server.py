@@ -1,9 +1,12 @@
+import datetime
+import hashlib
 import pathlib
 import os
 import re
+import time
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
-from constants import CONTENT_TYPES, STATUS_CODES, StatusCode
+from constants import CACHE_MINUTES, CONTENT_TYPES, STATUS_CODES, StatusCode
 from http_request import HttpRequest
 from logger import Logger
 import socket
@@ -22,6 +25,7 @@ class HttpServer:
         self.default_error_page = None
         self.soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.root = pathlib.Path(".").absolute().resolve()
+        self.cache = {}
 
     def __make_path(self, path: str) -> pathlib.Path:
         if type(path) == pathlib.Path:
@@ -76,18 +80,43 @@ class HttpServer:
         extension = path.split(".")[-1]
         return CONTENT_TYPES.get(extension, "plain/text")
 
+    def __generate_etag(self, data: bytes) -> str:
+        return hashlib.md5(data).hexdigest()
+
+    def __format_last_modified_date(self, timestamp: float) -> str:
+            return time.strftime('%a, %d %b %Y %H:%M:%S %Z', time.gmtime(timestamp))
+
+    def __is_within_cache_time(self, date: str) -> bool:
+        if date is None:
+            return False
+        date = datetime.datetime.strptime(date, '%a, %d %b %Y %H:%M:%S %Z')
+        return (datetime.datetime.now() - date).total_seconds()/60 < CACHE_MINUTES
+
     def __send_page(self, req: HttpRequest, client: socket.socket, status_code: StatusCode, html: bytes, content_type: str = None):
+        path = self.__make_path(req.path)
+        path = self.routes[path].path if path in self.routes else path
         if content_type is None:
-            path = self.__make_path(req.path)
-            path = self.routes[path].path if path in self.routes else path
             if type(path) != str: path = str(path)
             content_type = self.__get_content_type(path)
+
+        curr_etag =  self.__generate_etag(html if type(html) == bytes else html.encode())
+        last_modified = self.__format_last_modified_date(os.path.getmtime(path) if os.path.exists(path) else datetime.datetime.now().timestamp())
+        if status_code != StatusCode.NOT_MODIFIED and \
+           curr_etag == req.headers.get("If-None-Match") and \
+           req.headers.get("If-Modified-Since") == last_modified:
+            self.__send_page(req, client, StatusCode.NOT_MODIFIED, b"", content_type)
+            return
 
         headers = {
             "Content-Length": len(html),
             "Content-Type": content_type,
             "Server": "K9Server",
         }
+        if status_code == StatusCode.OK:
+            headers["ETag"] = curr_etag
+            headers["Last-Modified"] = last_modified
+            headers["Cache-Control"] = "public"
+
         if status_code == StatusCode.MOVED_PERMANENTLY or status_code == StatusCode.MOVED_TEMPORARILY:
             headers["Location"] = str(self.moved_routes[self.__make_path(req.path)]["new_path"])
         client.sendall(self.__construct_http_response(req, status_code, headers, html))
@@ -156,6 +185,7 @@ class HttpServer:
         requested_path = path
         req.path = requested_path
         route = self.routes.get(requested_path)
+
         if not route and self.__is_file_accessible(requested_path):
             file_code = self.__get_file_code(requested_path)
             if file_code != StatusCode.OK:

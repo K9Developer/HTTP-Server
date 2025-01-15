@@ -2,6 +2,8 @@ HTTP_SPLIT_REGEX = rb"(GET|POST|HEAD|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH) (.*
 
 STATUS_CODES = {400: "Bad Request",401: "Unauthorized",403: "Forbidden",404: "Not Found",405: "Method Not Allowed",500: "Internal Server Error",501: "Not Implemented",502: "Bad Gateway",503: "Service Unavailable",504: "Gateway Timeout",505: "HTTP Version Not Supported",301: "Moved Permanently",302: "Found",303: "See Other",304: "Not Modified",307: "Temporary Redirect",308: "Permanent Redirect",200: "OK"}
 
+CACHE_MINUTES = 5
+
 class StatusCode:
     BAD_REQUEST = 400
     UNAUTHORIZED = 401
